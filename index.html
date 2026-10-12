@@ -85,7 +85,7 @@
       <button id="start-btn" onclick="initAR()">START CAMERA</button>
     </div>
 
-    <div id="status-hud">SCAN ROAD SIGN TO START</div>
+    <div id="status-hud">SCAN TSUMY TO START</div>
     <div id="underwater-overlay"></div>
 
     <div id="ar-viewport">
@@ -108,7 +108,7 @@
         <a-entity id="sign-target" mindar-image-target="targetIndex: 0"></a-entity>
 
         <!-- INDEPENDENT TSUNAMI CONTAINER -->
-        <a-entity id="tsunami-container" position="0 0 -250" visible="false">
+        <a-entity id="tsunami-container" position="0 0 -500" visible="false">
           <a-entity id="gerstner-wave"></a-entity>
         </a-entity>
       </a-scene>
@@ -142,7 +142,7 @@
 
       function buildUltraWideGerstnerWave() {
         const container = document.getElementById('gerstner-wave');
-        const geometry = new THREE.PlaneGeometry(420, 210, 260, 180);
+        const geometry = new THREE.PlaneGeometry(1000, 400, 200, 100);
 
         const vertexShader = `
           uniform float time;
@@ -246,13 +246,13 @@
 
         const mesh = new THREE.Mesh(geometry, material);
         mesh.rotation.x = -Math.PI / 2.4;
-        mesh.position.set(0, 3, 0);
+        mesh.position.set(0, -5, 0);
 
         container.setObject3D('mesh', mesh);
       }
 
       // TARGET DETECTION & DYNAMIC HEADING REALIGNMENT
-      const START_Z = -250;
+      const START_Z = -500;
       let waveZ = START_Z;
       let clock = new THREE.Clock();
       let tsunamiTriggered = false;
@@ -286,30 +286,21 @@
         shaderUniforms.time.value = delta;
 
         if (tsunamiTriggered) {
-          waveZ += 0.35;
+          waveZ += 0.35; // Advances forward from -500
 
-          let currentHeight = Math.min(22.0, Math.max(1.8, (250 + waveZ) * 0.088)).toFixed(1);
-          hud.innerText = `SURGE HEIGHT: ${currentHeight}m`;
+          let currentHeight = Math.min(15.0, Math.max(1.8, (350 + waveZ) * 0.088)).toFixed(1);
+          hud.innerText = `WARNING: TSUNAMI APPROACHING!`;
+          //hud.innerText = `APPROACHING SURGE: ${currentHeight}m`;
 
-          if (waveZ >= -1.0 && waveZ <= 25.0) {
-            overlay.style.opacity = '1';
-            if (waveZ < 1.0) {
-              viewport.classList.add('impact-shake');
-            } else {
-              viewport.classList.remove('impact-shake');
-            }
-          } else {
-            overlay.style.opacity = '0';
-            viewport.classList.remove('impact-shake');
-          }
+          // Keep underwater overlay and shake disabled since it stays away
+          overlay.style.opacity = '0';
+          viewport.classList.remove('impact-shake');
 
-          // STOP AFTER 1 PASS
-          if (waveZ > 28) {
+          // STOP AND RESET BEFORE REACHING USER (e.g., stops at z = -80)
+          if (waveZ > -250) {
             tsunamiTriggered = false;
             tsunamiContainer.setAttribute('visible', 'false');
-            overlay.style.opacity = '0';
-            viewport.classList.remove('impact-shake');
-            hud.innerText = "SCAN ROAD SIGN TO START";
+            hud.innerText = "SCAN TSUNAMI TO START";
             waveZ = START_Z;
           }
 

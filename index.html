@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>Beach AR Tsunami</title>
+    
+    <!-- LOCAL LIBRARIES -->
+    <script src="aframe.min.js"></script>
+    <script src="mindar-image.prod.js"></script>
+    <script src="mindar-image-aframe.prod.js"></script>
+
+    <style>
+      body, html { margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; background: #000; }
+      
+      #start-overlay {
+        position: fixed;
+        top: 0; left: 0; width: 100vw; height: 100vh;
+        background: rgba(0, 15, 25, 0.95);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        z-index: 9999;
+      }
+
+      #start-btn {
+        background: #00e1ff;
+        color: #001519;
+        border: none;
+        padding: 16px 32px;
+        font-size: 18px;
+        font-weight: bold;
+        border-radius: 30px;
+        cursor: pointer;
+        box-shadow: 0 0 15px rgba(0, 225, 255, 0.5);
+      }
+
+      #ar-viewport { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; overflow: hidden; }
+      #underwater-overlay {
+        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 5; pointer-events: none;
+        background: radial-gradient(circle, rgba(0, 140, 180, 0.88) 0%, rgba(0, 15, 35, 0.98) 100%);
+        backdrop-filter: blur(8px); opacity: 0; transition: opacity 0.1s ease-in-out;
+      }
+      #status-hud {
+        position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+        background: rgba(0, 15, 25, 0.85); color: #00e1ff; padding: 10px 20px;
+        border-radius: 20px; font-family: monospace; font-size: 14px; font-weight: bold; z-index: 10;
+        border: 1px solid #00e1ff; box-shadow: 0 0 10px rgba(0, 225, 255, 0.3); text-align: center; width: 80%;
+      }
+      .impact-shake { animation: shake 0.08s infinite alternate; }
+      @keyframes shake {
+        0% { transform: translate(4px, 3px) rotate(0.5deg); }
+        50% { transform: translate(-5px, -4px) rotate(-0.5deg); }
+        100% { transform: translate(3px, -2px) rotate(0.2deg); }
+      }
+
+      /* Force WebGL canvas background to be transparent */
+      .a-canvas {
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        z-index: 2 !important;
+        background-color: transparent !important;
+      }
+
+      /* Force camera video feed underneath the canvas */
+      video {
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        object-fit: cover !important;
+        z-index: 1 !important;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- TAP TO START OVERLAY FOR MOBILE PERMISSIONS -->
+    <div id="start-overlay">
+      <h2 style="color: #00e1ff; font-family: sans-serif; margin-bottom: 20px;">TSUNAMI AR EXPERIENCE</h2>
+      <button id="start-btn" onclick="initAR()">START CAMERA</button>
+    </div>
+
+    <div id="status-hud">SCAN ROAD SIGN TO START</div>
+    <div id="underwater-overlay"></div>
+
+    <div id="ar-viewport">
+      <a-scene 
+        mindar-image="imageTargetSrc: ./tsumy.mind; autoStart: false; uiScanning: no;" 
+        embedded 
+        vr-mode-ui="enabled: false">
+        
+        <a-camera 
+          id="main-camera"
+          position="0 0 0" 
+          camera="far: 1000; near: 0.1;" 
+          look-controls="magicWindowTrackingEnabled: true; touchEnabled: false;">
+        </a-camera>
+
+        <a-light type="ambient" intensity="0.5" color="#d1f0ff"></a-light>
+        <a-light type="directional" position="-4 12 6" intensity="2.4" color="#ffffff"></a-light>
+
+        <!-- EMPTY TARGET LISTENER -->
+        <a-entity id="sign-target" mindar-image-target="targetIndex: 0"></a-entity>
+
+        <!-- INDEPENDENT TSUNAMI CONTAINER -->
+        <a-entity id="tsunami-container" position="0 0 -250" visible="false">
+          <a-entity id="gerstner-wave"></a-entity>
+        </a-entity>
+      </a-scene>
+    </div>
+
+    <script>
+      function initAR() {
+        document.getElementById('start-overlay').style.display = 'none';
+        
+        if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+          DeviceOrientationEvent.requestPermission().catch(() => {});
+        }
+
+        const sceneEl = document.querySelector('a-scene');
+        const arSystem = sceneEl.systems["mindar-image-system"];
+        arSystem.start();
+      }
+
+      document.querySelector('a-scene').addEventListener('loaded', function () {
+        this.renderer.setClearColor(0x000000, 0);
+        buildUltraWideGerstnerWave();
+      });
+
+      let shaderUniforms = {
+        time: { value: 0.0 },
+        sunDirection: { value: new THREE.Vector3(-0.4, 1.0, 0.6).normalize() },
+        deepColor: { value: new THREE.Color(0x001a2c) },
+        shallowColor: { value: new THREE.Color(0x0088aa) },
+        foamColor: { value: new THREE.Color(0xf5ffff) }
+      };
+
+      function buildUltraWideGerstnerWave() {
+        const container = document.getElementById('gerstner-wave');
+        const geometry = new THREE.PlaneGeometry(320, 110, 160, 80);
+
+        const vertexShader = `
+          uniform float time;
+          varying vec3 vWorldPosition;
+          varying vec3 vNormal;
+          varying vec2 vUv;
+          varying float vWaveHeight;
+
+          vec3 GerstnerWave(vec4 wave, vec3 p, inout vec3 tangent, inout vec3 binormal) {
+            float steepness = wave.z;
+            float wavelength = wave.w;
+            float k = 2.0 * 3.14159 / wavelength;
+            float c = sqrt(9.8 / k);
+            vec2 d = normalize(wave.xy);
+            float f = k * (dot(d, p.xy) - c * time);
+            float a = steepness / k;
+
+            tangent += vec3(-d.x * d.x * (steepness * sin(f)), -d.x * d.y * (steepness * sin(f)), d.x * (steepness * cos(f)));
+            binormal += vec3(-d.x * d.y * (steepness * sin(f)), -d.y * d.y * (steepness * sin(f)), d.y * (steepness * cos(f)));
+
+            return vec3(d.x * (a * cos(f)), d.y * (a * cos(f)), a * sin(f));
+          }
+
+          void main() {
+            vUv = uv;
+            vec3 gridPoint = position;
+            vec3 p = gridPoint;
+
+            vec3 tangent = vec3(1.0, 0.0, 0.0);
+            vec3 binormal = vec3(0.0, 1.0, 0.0);
+
+            vec4 wave1 = vec4(1.0, 0.1, 0.28, 50.0);
+            vec4 wave2 = vec4(0.8, 0.3, 0.18, 22.0);
+            vec4 wave3 = vec4(0.2, 0.9, 0.12, 10.0);
+
+            vec3 displacement = vec3(0.0);
+            displacement += GerstnerWave(wave1, gridPoint, tangent, binormal);
+            displacement += GerstnerWave(wave2, gridPoint, tangent, binormal);
+            displacement += GerstnerWave(wave3, gridPoint, tangent, binormal);
+
+            p += displacement;
+            
+            float sideWrap = pow(abs(uv.x - 0.5) * 2.0, 2.0) * -15.0;
+            p.z += pow(uv.y, 2.2) * 24.0 + sideWrap;
+
+            vNormal = normalize(cross(binormal, tangent));
+            vWorldPosition = (modelMatrix * vec4(p, 1.0)).xyz;
+            vWaveHeight = p.z;
+
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+          }
+        `;
+
+        const fragmentShader = `
+          uniform vec3 sunDirection;
+          uniform vec3 deepColor;
+          uniform vec3 shallowColor;
+          uniform vec3 foamColor;
+          uniform float time;
+
+          varying vec3 vWorldPosition;
+          varying vec3 vNormal;
+          varying vec2 vUv;
+          varying float vWaveHeight;
+
+          float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+          float noise(vec2 p) {
+            vec2 i = floor(p); vec2 f = fract(p);
+            f = f*f*(3.0-2.0*f);
+            return mix(mix(hash(i), hash(i + vec2(1.0,0.0)), f.x),
+                       mix(hash(i + vec2(0.0,1.0)), hash(i + vec2(1.0,1.0)), f.x), f.y);
+          }
+
+          void main() {
+            vec3 normal = normalize(vNormal);
+            vec3 viewDir = normalize(cameraPosition - vWorldPosition);
+            float fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 3.0);
+
+            vec3 halfVector = normalize(sunDirection + viewDir);
+            float specular = pow(max(dot(normal, halfVector), 0.0), 160.0) * 2.2;
+
+            vec3 waterBase = mix(deepColor, shallowColor, vUv.y);
+
+            float n = noise(vWorldPosition.xy * 0.15 + vec2(time * 0.5));
+            float foamThreshold = smoothstep(10.0, 20.0, vWaveHeight + n * 4.0);
+            
+            vec3 finalColor = mix(waterBase, foamColor, foamThreshold) + vec3(specular);
+            float opacity = mix(0.82, 0.96, foamThreshold + fresnel * 0.25);
+
+            gl_FragColor = vec4(finalColor, opacity);
+          }
+        `;
+
+        const material = new THREE.ShaderMaterial({
+          uniforms: shaderUniforms,
+          vertexShader: vertexShader,
+          fragmentShader: fragmentShader,
+          transparent: true,
+          side: THREE.DoubleSide
+        });
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.rotation.x = -Math.PI / 2.4;
+        mesh.position.set(0, 3, 0);
+
+        container.setObject3D('mesh', mesh);
+      }
+
+      // TARGET DETECTION & DYNAMIC HEADING REALIGNMENT
+      const START_Z = -250;
+      let waveZ = START_Z;
+      let clock = new THREE.Clock();
+      let tsunamiTriggered = false;
+
+      const overlay = document.getElementById('underwater-overlay');
+      const viewport = document.getElementById('ar-viewport');
+      const hud = document.getElementById('status-hud');
+      const targetEntity = document.getElementById('sign-target');
+      const tsunamiContainer = document.getElementById('tsunami-container');
+      const cameraEl = document.getElementById('main-camera');
+
+      targetEntity.addEventListener("targetFound", () => {
+        if (!tsunamiTriggered) {
+          tsunamiTriggered = true;
+          waveZ = START_Z;
+          
+          // ALIGN WAVE DIRECTION TO CURRENT CAMERA ROTATION
+          const camRotation = cameraEl.getAttribute('rotation');
+          if (camRotation) {
+            // Match the wave container's Y rotation to current camera facing angle
+            tsunamiContainer.setAttribute('rotation', `0 ${camRotation.y} 0`);
+          }
+
+          tsunamiContainer.setAttribute('visible', 'true');
+          hud.innerText = "WARNING: TSUNAMI APPROACHING!";
+        }
+      });
+
+      function animate() {
+        const delta = clock.getElapsedTime();
+        shaderUniforms.time.value = delta;
+
+        if (tsunamiTriggered) {
+          waveZ += 0.35;
+
+          let currentHeight = Math.min(22.0, Math.max(1.8, (250 + waveZ) * 0.088)).toFixed(1);
+          hud.innerText = `SURGE HEIGHT: ${currentHeight}m`;
+
+          if (waveZ >= -1.0 && waveZ <= 25.0) {
+            overlay.style.opacity = '1';
+            if (waveZ < 1.0) {
+              viewport.classList.add('impact-shake');
+            } else {
+              viewport.classList.remove('impact-shake');
+            }
+          } else {
+            overlay.style.opacity = '0';
+            viewport.classList.remove('impact-shake');
+          }
+
+          // STOP AFTER 1 PASS
+          if (waveZ > 28) {
+            tsunamiTriggered = false;
+            tsunamiContainer.setAttribute('visible', 'false');
+            overlay.style.opacity = '0';
+            viewport.classList.remove('impact-shake');
+            hud.innerText = "SCAN ROAD SIGN TO START";
+            waveZ = START_Z;
+          }
+
+          // Move along the local aligned forward Z axis
+          tsunamiContainer.object3D.position.z = waveZ * Math.cos(tsunamiContainer.object3D.rotation.y);
+          tsunamiContainer.object3D.position.x = waveZ * Math.sin(tsunamiContainer.object3D.rotation.y);
+        }
+
+        requestAnimationFrame(animate);
+      }
+
+      animate();
+    </script>
+  </body>
+</html>
